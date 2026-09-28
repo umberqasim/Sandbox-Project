@@ -1,0 +1,13 @@
+# Apply with:  kubectl apply -k k8s/
+# secrets.example.yaml is deliberately NOT listed: it only documents the Secret's shape (its values are
+# placeholders and would fail to apply). Create the real Secret with `kubectl create secret generic`
+# as described in README.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - db-deployment.yaml
+  - redis-deployment.yaml
+  - uploads-pvc.yaml
+  - backend-deployment.yaml
+  - worker-deployment.yaml
+  - frontend-deployment.yaml

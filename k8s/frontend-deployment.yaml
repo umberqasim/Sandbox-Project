@@ -1,0 +1,40 @@
+# Build the image first (see README.md):  docker build -t sandbox-frontend:latest ./frontend
+# The image runs the Vite development server (as in docker-compose.yml). For a real deployment serve
+# the built `dist/` folder from a static server instead (docs/deployment-guide.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sandbox-frontend
+  template:
+    metadata:
+      labels:
+        app: sandbox-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: sandbox-frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5173
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-frontend
+spec:
+  selector:
+    app: sandbox-frontend
+  ports:
+    - port: 5173
+  type: ClusterIP

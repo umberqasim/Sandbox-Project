@@ -1,0 +1,109 @@
+# The Celery worker. File name kept for history - it contains a StatefulSet, not a Deployment.
+#
+# Why a StatefulSet: after a crash the worker records the evaluations it was running as "interrupted"
+# and removes the images/containers they left behind. Both are keyed by the worker id
+# (SANDBOX_WORKER_ID). A StatefulSet gives pods stable names (sandbox-worker-0, -1, ...), so a
+# re-created pod gets the same id and can find its own leftovers. With a Deployment every new pod
+# has a new random name and could never recover the previous pod's evaluations.
+#
+# Requirements (see README.md): nodes that run Docker Engine and carry the label sandbox-docker=true,
+# because the worker launches sandbox containers through the node's /var/run/docker.sock.
+# Anyone who can exec into this pod controls that node's Docker - use a dedicated node pool.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-worker
+spec:
+  clusterIP: None        # headless: gives the StatefulSet pods stable identities
+  selector:
+    app: sandbox-worker
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: sandbox-worker
+spec:
+  serviceName: sandbox-worker
+  podManagementPolicy: Parallel
+  # replicas is left out on purpose: the HorizontalPodAutoscaler below owns the replica count.
+  selector:
+    matchLabels:
+      app: sandbox-worker
+  template:
+    metadata:
+      labels:
+        app: sandbox-worker
+    spec:
+      nodeSelector:
+        sandbox-docker: "true"
+      containers:
+        - name: worker
+          image: sandbox-backend:latest      # same image as the API; only the command differs (as in docker-compose.yml)
+          imagePullPolicy: IfNotPresent
+          command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+          env:
+            - name: DB_PASSWORD              # must be defined before DATABASE_URL uses it
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-secrets
+                  key: db-password
+            - name: DATABASE_URL
+              value: postgresql://sandbox:$(DB_PASSWORD)@sandbox-db:5432/sandbox
+            - name: CELERY_BROKER_URL
+              value: redis://sandbox-redis:6379/0
+            - name: CELERY_RESULT_BACKEND
+              value: redis://sandbox-redis:6379/0
+            - name: SANDBOX_WORKER_ID        # stable pod name, see the note at the top
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: GROQ_API_KEY             # optional: without it the AI review feature stays off
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-secrets
+                  key: groq-api-key
+                  optional: true
+          resources:
+            # The pod itself is light: the heavy work (docker build, sandbox containers) runs as sibling
+            # containers on the node's Docker daemon, outside this pod's cgroup.
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            - name: uploads
+              mountPath: /tmp/sandbox-runs
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket                     # the pod fails to start on nodes without Docker instead of silently misbehaving
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: sandbox-uploads-pvc
+---
+# CPU utilisation of the worker POD is a weak signal for this workload (see README.md: the sandbox
+# containers are not counted), so this HPA rarely triggers. Queue length is the right signal - see the
+# KEDA note in README.md. It needs resources.requests.cpu on the container, which is set above.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sandbox-worker-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: sandbox-worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

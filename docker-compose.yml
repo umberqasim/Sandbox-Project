@@ -1,0 +1,109 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sandbox_db
+    environment:
+      - POSTGRES_USER=sandbox
+      - POSTGRES_PASSWORD=sandbox
+      - POSTGRES_DB=sandbox
+    ports:
+      - "127.0.0.1:5432:5432"   # local debugging only - never expose Postgres to the network
+    volumes:
+      - sandbox_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: sandbox_redis
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: sandbox_backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    # NOTE: no /var/run/docker.sock here. Only the worker launches containers; the
+    # internet-facing API must not hold host-root-equivalent access.
+    volumes:
+      - ./backend/app:/app/app
+      - sandbox_workspace:/tmp/sandbox-runs
+    environment:
+      - SANDBOX_IMAGE_PREFIX=sandbox-run
+      - MAX_EXECUTION_SECONDS=120
+      - MAX_MEMORY_MB=512
+      - MAX_BUILD_MEMORY_MB=${MAX_BUILD_MEMORY_MB:-1024}
+      - DATABASE_URL=postgresql://sandbox:sandbox@db:5432/sandbox
+      - API_KEY=${API_KEY:?Set API_KEY in a .env file next to docker-compose.yml}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - ALLOWED_GIT_HOSTS=${ALLOWED_GIT_HOSTS:-github.com,gitlab.com,bitbucket.org}
+      # Portal callback: the API validates callback_url with these rules, the worker sends the call (see README.md).
+      - CALLBACK_ALLOWED_HOSTS=${CALLBACK_ALLOWED_HOSTS:-}
+      - CALLBACK_ALLOW_INSECURE=${CALLBACK_ALLOW_INSECURE:-0}
+      - CALLBACK_ALLOW_PRIVATE=${CALLBACK_ALLOW_PRIVATE:-0}
+    restart: unless-stopped
+
+  worker:
+    build: ./backend
+    container_name: sandbox_worker
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=${WORKER_CONCURRENCY:-1}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend/app:/app/app
+      - sandbox_workspace:/tmp/sandbox-runs
+    environment:
+      - SANDBOX_IMAGE_PREFIX=sandbox-run
+      # Stable id so that after `docker compose up -d` recreates this container it can still find and
+      # report the evaluations the old container was running. Do not set it when running several workers.
+      - SANDBOX_WORKER_ID=sandbox_worker
+      - MAX_EXECUTION_SECONDS=120
+      - MAX_MEMORY_MB=512
+      - MAX_BUILD_MEMORY_MB=${MAX_BUILD_MEMORY_MB:-1024}
+      - DATABASE_URL=postgresql://sandbox:sandbox@db:5432/sandbox
+      - API_KEY=${API_KEY:?Set API_KEY in a .env file next to docker-compose.yml}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - ALLOWED_GIT_HOSTS=${ALLOWED_GIT_HOSTS:-github.com,gitlab.com,bitbucket.org}
+      # Optional advisory AI review. An empty GROQ_API_KEY switches the feature off (see README.md).
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - AI_REVIEW_MODEL=${AI_REVIEW_MODEL:-}
+      - AI_REVIEW_SEND_CODE=${AI_REVIEW_SEND_CODE:-false}
+      # Portal callback (sent by the worker). CALLBACK_SECRET signs every call; leave empty to send unsigned.
+      - CALLBACK_SECRET=${CALLBACK_SECRET:-}
+      - CALLBACK_ALLOWED_HOSTS=${CALLBACK_ALLOWED_HOSTS:-}
+      - CALLBACK_ALLOW_INSECURE=${CALLBACK_ALLOW_INSECURE:-0}
+      - CALLBACK_ALLOW_PRIVATE=${CALLBACK_ALLOW_PRIVATE:-0}
+    restart: unless-stopped
+    
+  frontend:
+    build: ./frontend
+    container_name: sandbox_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  sandbox_workspace:
+  sandbox_db_data:

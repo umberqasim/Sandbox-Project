@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # the ReadWriteOnce volume can only be attached to one pod at a time
+  selector:
+    matchLabels:
+      app: sandbox-db
+  template:
+    metadata:
+      labels:
+        app: sandbox-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: sandbox
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-secrets
+                  key: db-password
+            - name: POSTGRES_DB
+              value: sandbox
+            - name: PGDATA           # a sub-folder: many volumes contain lost+found, which stops initdb
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "sandbox", "-d", "sandbox"]
+            periodSeconds: 10
+          volumeMounts:
+            - name: db-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: db-data
+          persistentVolumeClaim:
+            claimName: sandbox-db-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandbox-db-pvc
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-db
+spec:
+  selector:
+    app: sandbox-db
+  ports:
+    - port: 5432

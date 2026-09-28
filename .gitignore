@@ -1,0 +1,41 @@
+venv/
+__pycache__/
+*.pyc
+.env
+node_modules/
+*.log
+.venv/
+**/.venv/
+.pytest_cache/
+# Local patch, archive and editor backup artifacts
+/current3.zip
+/project_full.zip
+/apply_plagiarism*.sh
+/apply_ui_patch*.py
+/update-*.patch
+*.bak
+*.v2bak
+*:Zone.Identifier
+
+# Secrets
+.env
+**/.env
+!.env.example
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Node
+node_modules/
+frontend/build/
+frontend/dist/
+
+# Logs / data / misc
+*.log
+*.sqlite3
+data/
+.DS_Store

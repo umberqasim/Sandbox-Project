@@ -1,0 +1,76 @@
+# The API pod intentionally has no Docker socket: only worker pods launch containers.
+# Build the image first (see README.md):  docker build -t sandbox-backend:latest ./backend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sandbox-backend
+  template:
+    metadata:
+      labels:
+        app: sandbox-backend
+    spec:
+      containers:
+        - name: backend
+          image: sandbox-backend:latest
+          imagePullPolicy: IfNotPresent   # ":latest" would otherwise always be pulled and fail for a local image
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          env:
+            # DB_PASSWORD must come BEFORE DATABASE_URL: Kubernetes only expands $(VAR) with variables
+            # defined earlier in the same list; otherwise the literal text "$(DB_PASSWORD)" is used.
+            # The password ends up inside a URL, so use URL-safe characters.
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-secrets
+                  key: db-password
+            - name: DATABASE_URL
+              value: postgresql://sandbox:$(DB_PASSWORD)@sandbox-db:5432/sandbox
+            - name: CELERY_BROKER_URL
+              value: redis://sandbox-redis:6379/0
+            - name: CELERY_RESULT_BACKEND
+              value: redis://sandbox-redis:6379/0
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sandbox-secrets
+                  key: api-key
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: uploads
+              mountPath: /tmp/sandbox-runs
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: sandbox-uploads-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-backend
+spec:
+  selector:
+    app: sandbox-backend
+  ports:
+    - port: 8000
+  # ClusterIP on purpose: the dashboard calls the API at <same host>:8000, so reach both through
+  # `kubectl port-forward` (see README.md) or put them behind one Ingress host.
+  type: ClusterIP

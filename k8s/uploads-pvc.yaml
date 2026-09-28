@@ -1,0 +1,14 @@
+# ZIP uploads are saved by a backend pod and read by a worker pod, so both need the same files.
+# That requires a ReadWriteMany volume (NFS, CephFS, Azure Files, EFS, ...). A normal ReadWriteOnce
+# volume works only if backend and worker pods happen to run on the same node.
+# Set storageClassName to an RWX-capable class of your cluster.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sandbox-uploads-pvc
+spec:
+  accessModes: ["ReadWriteMany"]
+  # storageClassName: <your RWX storage class>
+  resources:
+    requests:
+      storage: 2Gi
