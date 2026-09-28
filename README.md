@@ -1,154 +1,212 @@
-# Enterprise AI Engineering Sandbox (Ezitech AI-022)
+# Enterprise AI Engineering Sandbox
 
-An evaluation platform that takes an internship submission (GitHub/GitLab repository, ZIP upload or
-pre-built Docker image), runs it inside an isolated container, tests it, analyses its engineering
-quality and produces a scored, structured report. A React dashboard provides submission, results,
-leaderboard and platform metrics.
+**Ezitech Industry AI Case Study - AI-022**
+
+An AI-assisted evaluation platform for internship projects submitted as GitHub or GitLab repositories, ZIP archives, or Docker images. It builds and runs supported projects in Docker, performs engineering checks, and generates scored reports.
+
+The React dashboard supports submissions, evaluation reports, a public scorecard, leaderboards, and platform metrics. Evaluation scores and feedback are rule-based. An optional Groq review adds written advice but never changes scores.
+
+## System Architecture
+
+~~~mermaid
+flowchart LR
+    U[Submitter / Mentor] --> FE[React Dashboard]
+    FE --> API[FastAPI REST API]
+    API --> DB[(PostgreSQL)]
+    API --> Q[Redis Queue]
+    Q --> W[Celery Worker]
+    W --> SB[Docker Sandbox]
+    SB --> AN[Static Analysis]
+    SB --> TE[Automated Tests]
+    AN --> EV[Scoring and Feedback]
+    TE --> EV
+    EV --> DB
+    EV --> ML[MLflow]
+    EV --> R[JSON and Markdown Reports]
+    AI[Optional Groq Review] -. advisory only .-> R
+~~~
+
+## The Problem This Solves
+
+| Manual evaluation | Engineering Sandbox |
+|---|---|
+| Mentors configure projects one by one | Repeatable automated evaluation workflow |
+| Setup failures delay reviews | Supported projects build and run in containers |
+| Scores and feedback vary by reviewer | Consistent rule-based checks and scoring |
+| Writing findings takes time | Reports summarize scores, risks, and next steps |
+| Results are difficult to compare | Leaderboards and public scorecard |
 
 ## Features
 
-| Area | What it does |
-|---|---|
-| Submission | GitHub / GitLab URL (https, allow-listed hosts), ZIP upload, Docker image |
-| Sandbox | Clone/extract, image build, dependency install, launch, test and cleanup for supported types. Runtime/test containers are limited to 512 MB; each Dockerfile build step defaults to a 1024 MB memory cap (MAX_BUILD_MEMORY_MB) |
-| Project types | Python, Node.js, PHP/Laravel (Flutter available on machines with enough RAM) |
-| Static analysis | Structure, code quality (flake8 / `node --check` / `php -l`), security (bandit + secret/dangerous-call scan), API quality, architecture (folders, file size, radon complexity), database config, authentication, error handling, security configuration, environment config, documentation |
-| Dynamic analysis | Test suite execution (pytest / npm test / phpunit), API health probe with listening-port discovery, root-URL smoke check, 15-request load check |
-| Scores | Feature completion, code quality, architecture, security, API quality, deployment readiness, engineering maturity (+ per-check scores) |
-| Feedback | Strengths, weaknesses, missing requirements, security risks, performance and refactoring suggestions, improvement roadmap (rule-based) |
-| AI review (optional) | A short mentor-style review written by a language model on Groq from the evaluation results. Advisory only: it never changes a score. Off unless `GROQ_API_KEY` is set |
-| Reporting | JSON result, Markdown report download, MLflow run per evaluation |
-| Leaderboard | Highest engineering score, fastest build, best architecture, best API design, best documentation, best performance |
-| Operations | Celery + Redis queue (one worker slot by default; configurable with `WORKER_CONCURRENCY`), `/metrics`, JSON logs, re-evaluation, scale-test script, Kubernetes reference manifests |
+- **Submissions:** GitHub/GitLab HTTPS repositories, ZIP uploads, and Docker images.
+- **Sandbox lifecycle:** Clone or extract, build, install dependencies, configure, launch, test, and clean up.
+- **Project types:** Python, Node.js, PHP/Laravel; Flutter where host resources allow.
+- **Static analysis:** Structure, code quality, security patterns, API quality, architecture, database configuration, authentication indicators, error handling, environment configuration, and documentation.
+- **Dynamic checks:** Existing test suites, API health probe with port discovery, root URL HTTP smoke check, and 15-request load check.
+- **Scores:** Feature completion, code quality, architecture, security, API quality, deployment readiness, and engineering maturity, with per-check results.
+- **Feedback:** Strengths, weaknesses, missing requirements, risks, performance and refactoring suggestions, and an improvement roadmap.
+- **Optional AI review:** Groq-generated mentor-style review of findings; advisory only.
+- **Reports and tracking:** JSON results, Markdown downloads, MLflow run per evaluation.
+- **Leaderboard:** Highest engineering score, fastest build, best architecture, API design, documentation, and performance.
+- **Operations:** Celery/Redis queue, re-evaluation, JSON logs, Prometheus metrics, scale-test script, Kubernetes reference manifests.
+- **Resource-conscious defaults:** One worker slot; runtime/test containers capped at 512 MB; build steps default to configurable 1024 MB memory cap.
 
-Documentation: [architecture & workflow](docs/architecture.md) · [database schema](docs/database-schema.md) ·
-[API reference](docs/api.md) · [deployment guide](docs/deployment-guide.md) ·
-[technology justifications](docs/technical-justifications.md) · [technical presentation](docs/technical-presentation.pptx) · [live demo runbook](docs/live-demo-guide.md). Interactive API docs are served at
-`http://localhost:8000/docs` (Swagger UI).
+## Tech Stack
 
-## Quick start
+**Backend:** Python 3.11, FastAPI, Pydantic, Celery, Redis, PostgreSQL, Docker SDK  
+**Analysis:** pytest, flake8, Bandit, Radon, node --check, php -l, supported project test commands  
+**Frontend:** React, Vite  
+**Infrastructure:** Docker Compose, Kubernetes reference manifests, Prometheus metrics  
+**Evaluation:** Rule-based scoring and feedback, optional Groq review, MLflow tracking
 
-```bash
-# WSL2 without systemd: start the Docker daemon in every new terminal session
+## Getting Started
+
+### Prerequisites
+- Docker Engine with Docker Compose v2
+- 4 GB RAM for the default single-worker setup; individual submitted builds may need more.
+- WSL2 without systemd may require starting Docker in each new terminal.
+
+### Start the platform
+
+~~~bash
+# WSL2 without systemd
 sudo dockerd > /tmp/docker.log 2>&1 &
 
-cp .env.example .env            # then set API_KEY to a fresh random value (openssl rand -hex 16)
+# From the project root
+cp .env.example .env
+# Set API_KEY to a fresh random value, e.g. openssl rand -hex 16
 docker compose up --build
-```
+~~~
 
-- Dashboard: http://localhost:5173 (enter the `API_KEY` from `.env`)
-- API: http://localhost:8000 (Swagger UI at `/docs`)
+- Dashboard: http://localhost:5173
+- API: http://localhost:8000
+- Swagger UI: http://localhost:8000/docs
 
-```bash
+Enter the API_KEY from .env in the dashboard.
+
+### Submit an evaluation
+
+~~~bash
 curl -X POST http://localhost:8000/evaluate \
-  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
-  -d '{"repo_url": "https://github.com/jatins/express-hello-world", "project_type": "node"}'
-# -> {"task_id": "...", "status": "queued"}
-```
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"repo_url":"https://github.com/jatins/express-hello-world","project_type":"node"}'
+~~~
 
-### AI review (optional)
+The response includes a queued task_id. Follow it in the dashboard or task API.
 
-Set `GROQ_API_KEY` in `.env` and run `docker compose up -d worker`. Each evaluation of a source project then gets a
-short written review (summary, strengths, concerns, next steps) shown in a clearly labelled "AI review" block and in the
-Markdown report. Without a key nothing changes.
+### Run backend tests
 
-- **Advisory only.** It is stored separately (`scores.ai_review`) and never changes a score, a ranking or the rule-based feedback.
-- **Privacy.** By default only evaluation results are sent (scores, finding descriptions, file paths) - no source code, no
-  repository URL, no logs. `AI_REVIEW_SEND_CODE=true` also sends up to 5 short, redacted excerpts around dangerous-call
-  findings; secrets are never sent. The data goes to Groq, a third party, so do not enable it for confidential submissions.
-- **Not deterministic.** The same project can get differently worded reviews; each evaluation keeps the one it received, with the model name.
-- **Never blocks an evaluation.** No network, a rate limit, a timeout or an unusable answer simply mean no review.
-- Model: `openai/gpt-oss-120b` by default (`AI_REVIEW_MODEL` to change it). Groq shut down `llama-3.3-70b-versatile` for
-  free and developer keys on 2026-08-16 and recommends `openai/gpt-oss-120b` instead ([deprecation details](https://console.groq.com/docs/deprecations)). If the review never appears, run
-  `docker compose logs worker | grep "AI review"`: the log line says whether the key or the model is the problem.
+Python 3.11 tests do not require Docker, PostgreSQL, or Redis:
 
-Run the unit tests with Python 3.11 (same runtime as the backend image; no Docker, Postgres or Redis service is required):
-
-```bash
+~~~bash
 cd backend
 python3.11 -m pip install -r requirements-dev.txt
 python3.11 -m pytest -q tests
-```
+~~~
 
-## Project structure
+## Optional AI Review
 
-```
+Set GROQ_API_KEY in .env and start or recreate the worker. Default model: openai/gpt-oss-120b; AI_REVIEW_MODEL can select another supported model.
+
+- **Advisory:** Stored separately in scores.ai_review; does not affect scores, ranking, or rule-based feedback.
+- **Privacy:** By default only scores, finding descriptions, and file paths are sent. No source code, repository URL, or logs.
+- **Source excerpts:** AI_REVIEW_SEND_CODE=true sends up to five short, redacted excerpts around dangerous-call findings. Secrets are not sent. Avoid this option for confidential submissions.
+- **Best effort:** Network errors, rate limits, timeouts, or unusable responses do not block evaluation.
+- **Non-deterministic wording:** Each review records its model; wording can vary.
+- Groq retired llama-3.3-70b-versatile for free and developer keys on 2026-08-16 and recommends openai/gpt-oss-120b ([details](https://console.groq.com/docs/deprecations)). Diagnose missing reviews with docker compose logs worker.
+
+## API Overview
+
+| Endpoint | Purpose |
+|---|---|
+| POST /evaluate | Queue repository evaluation |
+| POST /evaluate/zip | Submit ZIP |
+| POST /evaluate/docker | Submit Docker image |
+| Task endpoints | Check status and retrieve results |
+| Report endpoints | Retrieve JSON or Markdown report |
+| GET /public/scorecard | Public top five per category |
+| GET /metrics | Prometheus-compatible metrics |
+| GET /docs | Interactive Swagger documentation |
+
+See [API reference](docs/api.md) for schemas and details.
+
+## Project Structure
+
+~~~text
 Sandbox-Project/
-├── docker-compose.yml
-├── .env.example
-├── backend/
-│   ├── Dockerfile, requirements.txt, requirements-dev.txt
-│   ├── app/
-│   │   ├── main.py              # FastAPI routes, leaderboard, metrics
-│   │   ├── tasks.py             # Celery tasks (crash-safe persistence)
-│   │   ├── sandbox_engine.py    # clone/extract -> build -> run -> score -> cleanup
-│   │   ├── analysis.py          # static analysis
-│   │   ├── testing_engine.py    # test execution, API health, smoke and load checks
-│   │   ├── feedback_engine.py   # engineering maturity + feedback synthesis
-│   │   ├── report_generator.py  # Markdown report
-│   │   ├── validation.py        # URL / image reference validation
-│   │   ├── github_api.py, mlflow_tracking.py, database.py, schemas.py, auth.py, ...
-│   └── tests/                   # unit tests
-├── frontend/                    # React + Vite dashboard
-├── k8s/                         # Kubernetes reference manifests (not run on a live cluster)
-├── scripts/scale_test.py        # concurrent-submission load test
-└── docs/
-```
+|-- docker-compose.yml, .env.example
+|-- backend/
+|   |-- Dockerfile, requirements*.txt
+|   |-- app/
+|   |   |-- main.py              # API, leaderboard, metrics
+|   |   |-- tasks.py             # Celery tasks and crash-safe persistence
+|   |   |-- sandbox_engine.py    # clone, build, run, score, cleanup
+|   |   |-- analysis.py          # static analysis
+|   |   |-- testing_engine.py    # test, health, smoke, load checks
+|   |   |-- feedback_engine.py   # maturity and feedback
+|   |   |-- report_generator.py  # Markdown reports
+|   |   \-- validation.py, github_api.py, mlflow_tracking.py, database.py, ...
+|   \-- tests/
+|-- frontend/                    # React + Vite
+|-- k8s/                         # reference manifests
+|-- scripts/scale_test.py
+\-- docs/
+~~~
 
-## Security model
+## Security and Reliability
 
-- Submission build steps and runtime execute in Docker, not as host processes. Runtime/test containers receive memory,
-  CPU and PID limits, dropped capabilities and no-new-privileges; build steps receive a 1024 MB memory cap
-  (MAX_BUILD_MEMORY_MB). API-style projects run on an internal network; other runtime containers have networking disabled.
-- Repository URLs are restricted to `https://` and an allow-list of hosts (`ALLOWED_GIT_HOSTS`),
-  which blocks `file://`, internal hosts and git command-execution transports. Clones have a timeout.
-- ZIP uploads are size-limited, checked for path traversal, and limited in unpacked size and file count.
-- Only the **worker** mounts the Docker socket; the public API container does not.
-- Portal callbacks (`callback_url`) are https-only, refuse private/internal addresses (checked when queueing and again by
-  name resolution before every attempt), never follow redirects and can be signed (`CALLBACK_SECRET`) and restricted
-  to known hosts (`CALLBACK_ALLOWED_HOSTS`).
-- API access requires `X-API-Key` (constant-time comparison). CORS is header-based, without credentials;
-  set `CORS_ORIGINS` to lock it to the dashboard origin in production.
+- Submission build and runtime execute in Docker. Runtime/test containers have memory, CPU, PID limits, dropped capabilities, and no-new-privileges. Build steps default to a configurable 1024 MB memory cap.
+- API-style projects use an internal network; other runtime containers have networking disabled. Builds require network access.
+- Repository URLs require HTTPS and an allowed host (ALLOWED_GIT_HOSTS); clones time out; file://, internal hosts, and Git command-execution transports are blocked.
+- ZIP upload size, unpacked size, file count, and path traversal are checked.
+- Only the worker mounts the Docker socket; the public API does not.
+- Portal callback URLs require HTTPS and reject private/internal addresses; addresses are rechecked, redirects are not followed, callbacks may be signed (CALLBACK_SECRET) and host-restricted (CALLBACK_ALLOWED_HOSTS).
+- API calls require X-API-Key with constant-time comparison. CORS has no credentials; set CORS_ORIGINS for production.
+- Tasks are acknowledged after completion. Interrupted evaluations are recorded and can be re-evaluated; the worker cleans up leftovers on startup.
+- Time limits default to 1500 seconds soft and 1800 seconds hard (EVAL_SOFT_TIME_LIMIT, EVAL_HARD_TIME_LIMIT).
 
-**Known limitation:** the worker controls the host Docker daemon (needed to launch sibling containers), and Docker
-build steps execute submitted RUN instructions with network access. Build memory is capped, but builds do not have
-the same CPU/PID/network restrictions as runtime containers. For production, use a dedicated VM or rootless Docker,
-gVisor or Sysbox.
-
-## Reliability
-
-- Tasks are acknowledged **after** they finish. If a worker is killed mid-evaluation, the submission is recorded as
-  *failed - interrupted* (use **Re-evaluate**) as soon as the worker starts again, instead of vanishing.
-- Every evaluation has a time limit (`EVAL_SOFT_TIME_LIMIT` 1500 s, `EVAL_HARD_TIME_LIMIT` 1800 s).
-- Containers and images started by an evaluation are labelled; on start-up each worker removes what a killed run left
-  behind. `docker compose` services are never touched.
+**Deployment limitation:** The worker controls the host Docker daemon to start sibling containers. Docker build steps execute submitted RUN instructions with network access and do not have runtime CPU/PID/network restrictions. Production should use a dedicated VM or consider rootless Docker, gVisor, or Sysbox.
 
 ## Verification
 
-Verified 2026-09-28: backend suite **277 passed, 8 skipped** in a Python 3.11 container; the Vite production build succeeded in a temporary Node 20 container; local API health returned ok.
+Verified 2026-09-28:
+- Backend tests: **277 passed, 8 skipped** in Python 3.11 container.
+- Vite production build succeeded in temporary Node 20 container.
+- API health endpoint returned ok.
 
-## Preparing a submission
+## EEF Requirement Coverage
 
-Keep .env.example with placeholders and exclude the local .env file, which may contain the API key. When creating a source archive, also leave out node_modules, __pycache__, old ZIP snapshots (current3.zip, project_full.zip), patch helpers (apply_* and update-*.patch) and editor backup files (*.bak, *.v2bak). These are not application or EEF deliverables.
-
-## Coverage of the case study
-
-| Requirement | Status |
+| Requirement | Status and limitation |
 |---|---|
-| Submission: GitHub, ZIP, Docker image, GitLab | Done |
-| Sandbox: clone, build, install, launch, test, destroy, configure environment | Implemented for supported types. Builds have a configurable 1024 MB memory cap; env.example is used for Python/Node and Laravel gets a throw-away key. Build steps still need network access |
-| Validation: structure, API availability, security configuration, error handling | Done (static heuristics + live health probe) |
-| Validation: database connectivity, authentication flow | Static detection only; the platform does not connect to a database or log in |
-| Testing: unit tests, UI smoke, performance | Unit tests run when a test folder exists; UI smoke is an HTTP check (no browser); performance is a 15-request burst |
-| Testing: API tests (Newman), integration and database tests, Playwright | Not implemented (integration/database/UI test files are only detected). Node projects without scripts.test are reported as not run, not passed |
-| Analysis scores and feedback engine | Done, rule-based. An optional advisory LLM review (Groq) is available when `GROQ_API_KEY` is set; scores never depend on it |
-| Leaderboard (6 categories) | Done |
-| Architecture components (orchestration, sandbox, evaluation, static/dynamic pipelines, test runner, report generator, REST API, monitoring) | Done |
-| Bonus: parallel evaluation, one-click re-evaluation | One worker slot by default for 4 GB hosts; set `WORKER_CONCURRENCY=2` for parallel evaluations on a larger host. Re-evaluation is available from the dashboard |
-| Bonus: auto-scaling workers | Kubernetes reference manifests only (StatefulSet + HPA); statically validated but not run on a live cluster. Docker Compose does not autoscale |
-| Bonus: public scorecard | Done (`GET /public/scorecard`, unauthenticated, top 5 per category; `/public` dashboard page needs no API key) |
-| Bonus: resource usage monitoring | Partial: CPU/memory snapshot after the load check is shown in the report/dashboard; continuous monitoring is not implemented |
-| Bonus: plagiarism detection | Done (exact + structural fingerprints of tokenised source, so verbatim AND renamed copies are found; file-level matches for partly copied projects; common starter code ignored automatically once enough submissions exist; compares only against this platform's earlier submissions of the same project type; mentor-facing note/flag, never changes a score - see `docs/technical-justifications.md`) |
-| Integration with the Ezitech Internship Portal | REST submission endpoints and an optional signed callback are implemented; real portal connection remains unverified (see API documentation) |
-| Deliverables: architecture diagram, workflow, API docs, schema, deployment guide | In `docs/` |
-| Deliverables: technical presentation and demo guide | [8-slide technical presentation](docs/technical-presentation.pptx) and [live demo runbook](docs/live-demo-guide.md) prepared; the actual demonstration still needs to be presented |
+| GitHub, GitLab, ZIP, Docker submissions | Implemented |
+| Clone, build, install, configure, launch, test, destroy | Implemented for supported types; build memory defaults to 1024 MB, needs network, and may need more RAM |
+| Structure, API availability, security configuration, error handling | Static heuristics and live health probe |
+| Database connectivity and authentication flow | Static detection only; no database connection or login |
+| Unit tests, UI smoke, performance | Existing unit tests run when present; UI smoke is HTTP only, no browser; performance is a 15-request burst |
+| Newman API, integration/database tests, Playwright | Not implemented; presence may be detected but suites are not run. Node projects without scripts.test are reported as not run |
+| Scores and feedback | Rule-based; optional Groq review does not affect scores |
+| Six leaderboard categories | Implemented |
+| Orchestration, sandbox, analysis pipelines, test runner, reports, REST API, monitoring | Implemented |
+| Parallel evaluation and re-evaluation | Re-evaluation available; one worker by default for 4 GB hosts; WORKER_CONCURRENCY=2 is for larger hosts |
+| Autoscaling workers | Kubernetes StatefulSet/HPA are references, not run on a live cluster; Compose does not autoscale |
+| Public scorecard | GET /public/scorecard, top five per category; public dashboard page needs no API key |
+| Resource monitoring | Partial snapshots after load check; no continuous monitoring |
+| Plagiarism detection | Exact and structural token fingerprints compare earlier submissions of the same project type; partial file matches supported; common starter code ignored after enough submissions. Mentor-facing and does not affect scores. See [technical justifications](docs/technical-justifications.md) |
+| Internship Portal integration | REST endpoints and optional signed callback implemented; real portal connection unverified |
+| Architecture, workflow, API docs, schema, deployment guide | In docs/ |
+| Presentation and live demo | [Technical presentation](docs/technical-presentation.pptx) and [demo runbook](docs/live-demo-guide.md) prepared; live presentation remains to be delivered |
+
+## Documentation
+
+- [Architecture and workflow](docs/architecture.md)
+- [Database schema](docs/database-schema.md)
+- [API reference](docs/api.md)
+- [Deployment guide](docs/deployment-guide.md)
+- [Technical justifications](docs/technical-justifications.md)
+- [Live demo runbook](docs/live-demo-guide.md)
+- [Swagger UI](http://localhost:8000/docs)
+
+## Preparing a Source Submission
+
+Keep .env.example with placeholders; exclude local .env containing the API key. Exclude node_modules, __pycache__, old ZIP snapshots (current3.zip, project_full.zip), patch helpers (apply_*, update-*.patch), and editor backups (*.bak, *.v2bak) from source archives.
